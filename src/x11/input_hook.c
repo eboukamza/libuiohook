@@ -100,6 +100,10 @@ static struct xkb_state *state = NULL;
 // Virtual event pointer.
 static uiohook_event event;
 
+static Display* disp;
+static Window win;
+static bool grab_enabled = false;
+
 // Event dispatch callback.
 static dispatcher_t dispatcher = NULL;
 
@@ -1063,6 +1067,34 @@ static int xrecord_start() {
 	return status;
 }
 
+static void init_grab() {
+	disp = XOpenDisplay(NULL);
+	win = XDefaultRootWindow(disp);
+}
+
+static void enable_grab_mouse() {
+	if(disp == NULL) {
+		init_grab();
+	}
+	unsigned int masks = ButtonPressMask | ButtonReleaseMask;
+	XGrabPointer(disp, win, true, masks, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
+
+	grab_enabled = true;
+	logger(LOG_LEVEL_INFO,	"%s [%u]: Grab mouse click enabled.\n",
+			__FUNCTION__, __LINE__);
+}
+
+static void disable_grab_mouse() {
+	// Make sure the data display is synchronized to prevent late event delivery!
+	// See Bug 42356 for more information.
+	// https://bugs.freedesktop.org/show_bug.cgi?id=42356#c4
+	XSynchronize(disp, True);
+	XUngrabPointer(disp, CurrentTime);
+	grab_enabled = false;
+	logger(LOG_LEVEL_INFO,	"%s [%u]: Grab mouse click disabled.\n",
+			__FUNCTION__, __LINE__);
+}
+
 UIOHOOK_API int hook_run() {
 	int status = UIOHOOK_FAILURE;
 
@@ -1094,6 +1126,17 @@ UIOHOOK_API int hook_run() {
 	return status;
 }
 
+UIOHOOK_API void grab_mouse_click(bool enable) {
+	if(enable == grab_enabled) {
+		return;
+	}
+	if(enable) {
+		enable_grab_mouse();
+	} else {
+		disable_grab_mouse();
+	}
+}
+
 UIOHOOK_API int hook_stop() {
 	int status = UIOHOOK_FAILURE;
 
@@ -1110,6 +1153,8 @@ UIOHOOK_API int hook_stop() {
 					pthread_cond_signal(&hook_xrecord_cond);
 					pthread_mutex_unlock(&hook_xrecord_mutex);
 					#endif
+
+					XCloseDisplay(disp);
 
 					// See Bug 42356 for more information.
 					// https://bugs.freedesktop.org/show_bug.cgi?id=42356#c4
